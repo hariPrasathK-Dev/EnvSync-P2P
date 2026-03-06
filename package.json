@@ -1,0 +1,112 @@
+{
+  "name": "envsync-p2p",
+  "displayName": "EnvSync P2P",
+  "description": "Securely synchronize .gitignored files between developers via peer-to-peer, end-to-end encrypted WebRTC data channels.",
+  "version": "0.1.0",
+  "publisher": "envsync",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "keywords": [
+    "env",
+    "sync",
+    "p2p",
+    "peer-to-peer",
+    "encryption",
+    "gitignore",
+    "dotenv",
+    "secrets"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "envsync-sidebar",
+          "title": "EnvSync P2P",
+          "icon": "$(lock)"
+        }
+      ]
+    },
+    "views": {
+      "explorer": [
+        {
+          "id": "envsync-peers",
+          "name": "EnvSync Peers & Files",
+          "contextualTitle": "EnvSync P2P"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "envsync.startSession",
+        "title": "EnvSync: Start Session",
+        "icon": "$(plug)"
+      },
+      {
+        "command": "envsync.shareFile",
+        "title": "EnvSync: Share File",
+        "icon": "$(cloud-upload)"
+      },
+      {
+        "command": "envsync.joinSession",
+        "title": "EnvSync: Join Session",
+        "icon": "$(cloud-download)"
+      },
+      {
+        "command": "envsync.reviewIncoming",
+        "title": "EnvSync: Review Incoming File",
+        "icon": "$(git-compare)"
+      },
+      {
+        "command": "envsync.refreshFiles",
+        "title": "EnvSync: Refresh Ignored Files",
+        "icon": "$(refresh)"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "envsync.shareFile",
+          "when": "view == envsync-peers",
+          "group": "navigation@1"
+        },
+        {
+          "command": "envsync.joinSession",
+          "when": "view == envsync-peers",
+          "group": "navigation@2"
+        },
+        {
+          "command": "envsync.refreshFiles",
+          "when": "view == envsync-peers",
+          "group": "navigation@3"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "webpack --mode production",
+    "watch": "webpack --mode development --watch",
+    "lint": "eslint src --ext ts",
+    "test": "node ./dist/tests/runTests.js"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.85.0",
+    "ts-loader": "^9.5.1",
+    "typescript": "^5.3.3",
+    "webpack": "^5.89.0",
+    "webpack-cli": "^5.1.4"
+  },
+  "dependencies": {
+    "ignore": "^5.3.0"
+  }
+}
