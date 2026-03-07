@@ -34,6 +34,15 @@ console.log(`[EnvSync Relay] No file data is stored or inspected.`);
 console.log('─'.repeat(50));
 wss.on('connection', (ws) => {
     let currentRoom = null;
+    // Keepalive: ping every 25s to prevent Render/proxy timeout
+    const pingInterval = setInterval(() => {
+        if (ws.readyState === 1 /* OPEN */) {
+            ws.ping();
+        }
+    }, 25000);
+    ws.on('pong', () => {
+        // Client is alive — nothing to do
+    });
     ws.on('message', (raw) => {
         try {
             const message = JSON.parse(raw.toString());
@@ -55,15 +64,27 @@ wss.on('connection', (ws) => {
                     console.log(`[Room] Created: ${roomId.substring(0, 8)}...`);
                 }
                 const room = rooms.get(roomId);
+                // Check if there are existing peers BEFORE adding the new one
+                const existingPeerCount = room.clients.size;
                 room.clients.add(ws);
                 currentRoom = roomId;
                 console.log(`[Room] ${roomId.substring(0, 8)}... — peer joined (${room.clients.size} total)`);
-                // Notify other peers in the room
+                // Notify OTHER peers in the room about the new joiner
                 broadcast(roomId, ws, {
                     type: 'peer-joined',
                     roomId,
                     senderId,
                 });
+                // Also notify the JOINING peer about existing peers
+                // This ensures the sender knows the receiver is already there
+                if (existingPeerCount > 0) {
+                    ws.send(JSON.stringify({
+                        type: 'peer-joined',
+                        roomId,
+                        senderId: 'existing-peer',
+                    }));
+                    console.log(`[Room] ${roomId.substring(0, 8)}... — notified joiner about ${existingPeerCount} existing peer(s)`);
+                }
                 return;
             }
             // For all other message types, forward to peers in the same room
@@ -74,6 +95,10 @@ wss.on('connection', (ws) => {
                 }));
                 return;
             }
+            // Log data forwarding for debugging
+            if (type === 'data') {
+                console.log(`[Data] ${roomId.substring(0, 8)}... — forwarding data message`);
+            }
             // Forward the message verbatim to all other clients in the room
             broadcast(roomId, ws, message);
         }
@@ -82,6 +107,7 @@ wss.on('connection', (ws) => {
         }
     });
     ws.on('close', () => {
+        clearInterval(pingInterval);
         if (currentRoom && rooms.has(currentRoom)) {
             const room = rooms.get(currentRoom);
             room.clients.delete(ws);

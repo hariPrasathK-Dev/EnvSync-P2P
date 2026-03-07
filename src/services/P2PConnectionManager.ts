@@ -89,8 +89,11 @@ export class P2PConnectionManager implements vscode.Disposable {
     // Use WebSocket tunnel as fallback when WebRTC is unavailable
     private useWebSocketFallback = false;
 
-    // Ready handshake: sender waits for receiver to signal readiness
-    private readyResolver: (() => void) | null = null;
+    // Guard: prevent duplicate startConnection calls
+    private connectionStarted = false;
+
+    // Timeout for Ready handshake fallback
+    private readyTimeout: ReturnType<typeof setTimeout> | null = null;
 
     constructor(signaling: SignalingService, outputChannel: vscode.OutputChannel) {
         this.signaling = signaling;
@@ -117,9 +120,18 @@ export class P2PConnectionManager implements vscode.Disposable {
         });
 
         this.signaling.onPeerJoined(() => {
-            if (this.isSender) {
-                this.log('Peer joined — initiating connection');
+            this.log('Peer joined event received');
+
+            if (this.isSender && !this.connectionStarted) {
+                this.log('Sender: peer joined — initiating connection');
                 this.startConnection();
+            }
+
+            if (!this.isSender && this.useWebSocketFallback) {
+                // Receiver: re-send Ready in case the first one was lost
+                // (e.g. sender hadn't joined yet when first Ready was sent)
+                this.log('Receiver: peer joined — re-sending Ready handshake');
+                this.sendDataMessage({ type: DataMessageType.Ready });
             }
         });
     }
@@ -252,6 +264,11 @@ export class P2PConnectionManager implements vscode.Disposable {
      * called in initAsSender, so we just check the fallback flag.
      */
     private async startConnection(): Promise<void> {
+        if (this.connectionStarted) {
+            this.log('startConnection already called — skipping');
+            return;
+        }
+        this.connectionStarted = true;
         if (this.useWebSocketFallback) {
             this.initWebSocketTunnel();
             return;
@@ -384,9 +401,18 @@ export class P2PConnectionManager implements vscode.Disposable {
         });
 
         if (this.isSender) {
-            // Sender: wait for the receiver's Ready signal before setting Connected
+            // Sender: wait for the receiver's Ready signal
             this.log('Sender tunnel ready — waiting for receiver Ready handshake...');
-            // Don't set Connected yet — wait for Ready message from receiver
+
+            // Fallback: if Ready doesn't arrive in 3 seconds, proceed anyway
+            // (handles edge cases where Ready is lost)
+            this.readyTimeout = setTimeout(() => {
+                if (this.state !== ConnectionState.Connected &&
+                    this.state !== ConnectionState.Transferring) {
+                    this.log('Ready timeout — proceeding without handshake');
+                    this.setState(ConnectionState.Connected);
+                }
+            }, 3000);
         } else {
             // Receiver: send Ready message to tell sender we're listening
             this.log('Receiver tunnel ready — sending Ready handshake to sender');
@@ -492,8 +518,16 @@ export class P2PConnectionManager implements vscode.Disposable {
                 case DataMessageType.Ready:
                     this.log('Received Ready handshake from receiver');
                     if (this.isSender) {
+                        // Clear the fallback timeout
+                        if (this.readyTimeout) {
+                            clearTimeout(this.readyTimeout);
+                            this.readyTimeout = null;
+                        }
                         // Receiver is ready — now set Connected to trigger file send
-                        this.setState(ConnectionState.Connected);
+                        if (this.state !== ConnectionState.Connected &&
+                            this.state !== ConnectionState.Transferring) {
+                            this.setState(ConnectionState.Connected);
+                        }
                     }
                     break;
             }
