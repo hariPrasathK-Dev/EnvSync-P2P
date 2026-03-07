@@ -1,3 +1,4 @@
+"use strict";
 /**
  * EnvSync P2P — Minimal Signaling Relay Server
  *
@@ -18,39 +19,24 @@
  * Or after building:
  *   node dist/relay/server.js [--port 8787]
  */
-
-import { WebSocketServer, WebSocket } from 'ws';
-
-interface Room {
-    clients: Set<WebSocket>;
-    createdAt: Date;
-}
-
-const PORT = parseInt(
-    process.env.PORT ||
+Object.defineProperty(exports, "__esModule", { value: true });
+const ws_1 = require("ws");
+const PORT = parseInt(process.env.PORT ||
     process.argv.find((_, i, arr) => arr[i - 1] === '--port') ||
-    '8787',
-    10,
-);
-const rooms = new Map<string, Room>();
-
+    '8787', 10);
+const rooms = new Map();
 // Auto-cleanup rooms older than 1 hour
 const ROOM_TTL_MS = 60 * 60 * 1000;
-
-const wss = new WebSocketServer({ port: PORT, host: '0.0.0.0' });
-
+const wss = new ws_1.WebSocketServer({ port: PORT, host: '0.0.0.0' });
 console.log(`[EnvSync Relay] Signaling relay started on port ${PORT}`);
 console.log(`[EnvSync Relay] This server forwards SDP/ICE messages only.`);
 console.log(`[EnvSync Relay] No file data is stored or inspected.`);
 console.log('─'.repeat(50));
-
-wss.on('connection', (ws: WebSocket) => {
-    let currentRoom: string | null = null;
-
-    ws.on('message', (raw: Buffer) => {
+wss.on('connection', (ws) => {
+    let currentRoom = null;
+    ws.on('message', (raw) => {
         try {
             const message = JSON.parse(raw.toString());
-
             if (!message.type || !message.roomId) {
                 ws.send(JSON.stringify({
                     type: 'error',
@@ -58,9 +44,7 @@ wss.on('connection', (ws: WebSocket) => {
                 }));
                 return;
             }
-
             const { type, roomId, senderId } = message;
-
             if (type === 'join') {
                 // Create room if it doesn't exist
                 if (!rooms.has(roomId)) {
@@ -70,13 +54,10 @@ wss.on('connection', (ws: WebSocket) => {
                     });
                     console.log(`[Room] Created: ${roomId.substring(0, 8)}...`);
                 }
-
-                const room = rooms.get(roomId)!;
+                const room = rooms.get(roomId);
                 room.clients.add(ws);
                 currentRoom = roomId;
-
                 console.log(`[Room] ${roomId.substring(0, 8)}... — peer joined (${room.clients.size} total)`);
-
                 // Notify other peers in the room
                 broadcast(roomId, ws, {
                     type: 'peer-joined',
@@ -85,7 +66,6 @@ wss.on('connection', (ws: WebSocket) => {
                 });
                 return;
             }
-
             // For all other message types, forward to peers in the same room
             if (!rooms.has(roomId)) {
                 ws.send(JSON.stringify({
@@ -94,28 +74,23 @@ wss.on('connection', (ws: WebSocket) => {
                 }));
                 return;
             }
-
             // Forward the message verbatim to all other clients in the room
             broadcast(roomId, ws, message);
-
-        } catch (err) {
+        }
+        catch (err) {
             console.error('[Error] Failed to parse message');
         }
     });
-
     ws.on('close', () => {
         if (currentRoom && rooms.has(currentRoom)) {
-            const room = rooms.get(currentRoom)!;
+            const room = rooms.get(currentRoom);
             room.clients.delete(ws);
-
             console.log(`[Room] ${currentRoom.substring(0, 8)}... — peer left (${room.clients.size} remaining)`);
-
             // Notify remaining peers
             broadcast(currentRoom, ws, {
                 type: 'peer-left',
                 roomId: currentRoom,
             });
-
             // Clean up empty rooms
             if (room.clients.size === 0) {
                 rooms.delete(currentRoom);
@@ -123,27 +98,25 @@ wss.on('connection', (ws: WebSocket) => {
             }
         }
     });
-
-    ws.on('error', (err: Error) => {
+    ws.on('error', (err) => {
         console.error(`[Error] WebSocket error: ${err.message}`);
     });
 });
-
 /**
  * Broadcast a message to all clients in a room except the sender.
  */
-function broadcast(roomId: string, sender: WebSocket, message: unknown): void {
+function broadcast(roomId, sender, message) {
     const room = rooms.get(roomId);
-    if (!room) { return; }
-
+    if (!room) {
+        return;
+    }
     const json = JSON.stringify(message);
     for (const client of room.clients) {
-        if (client !== sender && client.readyState === WebSocket.OPEN) {
+        if (client !== sender && client.readyState === ws_1.WebSocket.OPEN) {
             client.send(json);
         }
     }
 }
-
 /**
  * Periodic cleanup of stale rooms.
  */
