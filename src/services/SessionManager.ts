@@ -271,6 +271,13 @@ export class SessionManager implements vscode.Disposable {
             this.updateStatus('$(error) Error', error);
         });
 
+        this.p2pManager.onStateChange((state) => {
+            this.log(`Receiver state changed: ${state}`);
+            if (state === ConnectionState.Connected) {
+                this.updateStatus('$(sync~spin) Ready — waiting for sender...', 'Connected to peer');
+            }
+        });
+
         vscode.window.showInformationMessage(
             'EnvSync: Connected! Waiting for file transfer...',
         );

@@ -9,6 +9,7 @@ export enum DataMessageType {
     FileChunk = 'file-chunk',
     FileComplete = 'file-complete',
     Ack = 'ack',
+    Ready = 'ready',
     Error = 'error',
 }
 
@@ -87,6 +88,9 @@ export class P2PConnectionManager implements vscode.Disposable {
 
     // Use WebSocket tunnel as fallback when WebRTC is unavailable
     private useWebSocketFallback = false;
+
+    // Ready handshake: sender waits for receiver to signal readiness
+    private readyResolver: (() => void) | null = null;
 
     constructor(signaling: SignalingService, outputChannel: vscode.OutputChannel) {
         this.signaling = signaling;
@@ -379,8 +383,16 @@ export class P2PConnectionManager implements vscode.Disposable {
             this.handleDataMessage(data);
         });
 
-        // Mark as connected so the sender begins transmitting
-        this.setState(ConnectionState.Connected);
+        if (this.isSender) {
+            // Sender: wait for the receiver's Ready signal before setting Connected
+            this.log('Sender tunnel ready — waiting for receiver Ready handshake...');
+            // Don't set Connected yet — wait for Ready message from receiver
+        } else {
+            // Receiver: send Ready message to tell sender we're listening
+            this.log('Receiver tunnel ready — sending Ready handshake to sender');
+            this.sendDataMessage({ type: DataMessageType.Ready });
+            this.setState(ConnectionState.Connected);
+        }
     }
 
     /**
@@ -393,6 +405,10 @@ export class P2PConnectionManager implements vscode.Disposable {
         const checksum = crypto.createHash('sha256').update(encryptedData).digest('hex');
 
         this.setState(ConnectionState.Transferring);
+
+        // Small delay to ensure receiver's signaling handlers are processing
+        await new Promise(resolve => setTimeout(resolve, 500));
+        this.log(`Starting file transfer: ${fileName}`);
 
         // Send metadata first
         const metadata: FileMetadata = {
@@ -471,6 +487,14 @@ export class P2PConnectionManager implements vscode.Disposable {
                 case DataMessageType.Error:
                     this.log(`Remote error: ${message.payload}`);
                     this.onErrorCallback?.(message.payload as string);
+                    break;
+
+                case DataMessageType.Ready:
+                    this.log('Received Ready handshake from receiver');
+                    if (this.isSender) {
+                        // Receiver is ready — now set Connected to trigger file send
+                        this.setState(ConnectionState.Connected);
+                    }
                     break;
             }
         } catch (err) {
