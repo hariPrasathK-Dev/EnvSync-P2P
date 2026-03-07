@@ -5,6 +5,10 @@
   "version": "0.1.0",
   "publisher": "envsync",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/hariPrasathK-Dev/EnvSync-P2P.git"
+  },
   "engines": {
     "vscode": "^1.85.0"
   },

@@ -43,7 +43,7 @@ export class SessionManager implements vscode.Disposable {
         ((data: Buffer, fileName: string) => Promise<void>) | null = null;
 
     // Relay URL — configurable, defaults to localhost for dev
-    private static readonly DEFAULT_RELAY_URL = 'ws://localhost:8787';
+    private static readonly DEFAULT_RELAY_URL = 'wss://envsync-p2p.onrender.com';
 
     constructor(
         workspaceRoot: string,
