@@ -95,6 +95,9 @@ export class P2PConnectionManager implements vscode.Disposable {
     // Timeout for Ready handshake fallback
     private readyTimeout: ReturnType<typeof setTimeout> | null = null;
 
+    // Stop-and-wait ACK resolver
+    private pendingChunkAck: ((index: number) => void) | null = null;
+
     constructor(signaling: SignalingService, outputChannel: vscode.OutputChannel) {
         this.signaling = signaling;
         this.outputChannel = outputChannel;
@@ -176,86 +179,10 @@ export class P2PConnectionManager implements vscode.Disposable {
         );
     }
 
-    /**
-     * Create a WebRTC peer connection.
-     * Falls back to WebSocket tunnel if WebRTC is unavailable in Node.js.
-     */
     private createPeerConnection(): void {
-        try {
-            // Try to use wrtc (node-webrtc) for real WebRTC
-            let RTCPeerConnectionImpl: typeof RTCPeerConnection;
-            try {
-                const wrtc = require('wrtc');
-                RTCPeerConnectionImpl = wrtc.RTCPeerConnection;
-                this.log('Using wrtc (node-webrtc) for P2P connection');
-            } catch {
-                // wrtc not available — will use WebSocket fallback
-                this.log('wrtc not available — will use encrypted WebSocket tunnel fallback');
-                this.useWebSocketFallback = true;
-                return;
-            }
-
-            this.peerConnection = new RTCPeerConnectionImpl(P2PConnectionManager.ICE_SERVERS);
-
-            // Handle ICE candidates
-            this.peerConnection.onicecandidate = (event: RTCPeerConnectionIceEvent) => {
-                if (event.candidate) {
-                    this.log('Sending ICE candidate');
-                    this.signaling.sendIceCandidate(event.candidate.toJSON());
-                }
-            };
-
-            // Monitor connection state
-            this.peerConnection.onconnectionstatechange = () => {
-                const state = this.peerConnection?.connectionState;
-                this.log(`Connection state: ${state}`);
-
-                switch (state) {
-                    case 'connected':
-                        this.setState(ConnectionState.Connected);
-                        break;
-                    case 'failed':
-                        this.setState(ConnectionState.Failed);
-                        this.onErrorCallback?.(
-                            'P2P connection failed. This may be caused by a strict NAT/firewall. ' +
-                            'Try connecting from a different network.'
-                        );
-                        break;
-                    case 'disconnected':
-                        this.setState(ConnectionState.Disconnected);
-                        break;
-                }
-            };
-
-            // Handle ICE connection state for NAT traversal diagnostics
-            this.peerConnection.oniceconnectionstatechange = () => {
-                const state = this.peerConnection?.iceConnectionState;
-                this.log(`ICE connection state: ${state}`);
-
-                if (state === 'failed') {
-                    this.onErrorCallback?.(
-                        'NAT traversal failed — unable to establish a direct P2P connection. ' +
-                        'Both peers may be behind symmetric NATs. ' +
-                        'Falling back to encrypted WebSocket relay tunnel.'
-                    );
-                    this.useWebSocketFallback = true;
-                    this.initWebSocketTunnel();
-                }
-            };
-
-            // Receiver: handle incoming data channel
-            if (!this.isSender) {
-                this.peerConnection.ondatachannel = (event: RTCDataChannelEvent) => {
-                    this.log('Incoming data channel received');
-                    this.dataChannel = event.channel;
-                    this.setupDataChannel();
-                };
-            }
-        } catch (err: unknown) {
-            const msg = err instanceof Error ? err.message : String(err);
-            this.log(`Failed to create peer connection: ${msg}`);
-            this.useWebSocketFallback = true;
-        }
+        this.log('WebRTC (wrtc) native module disabled in VS Code extensions.');
+        this.log('Defaulting to encrypted WebSocket tunnel fallback.');
+        this.useWebSocketFallback = true;
     }
 
     /**
@@ -427,7 +354,9 @@ export class P2PConnectionManager implements vscode.Disposable {
      */
     public async sendFile(encryptedData: Buffer, fileName: string): Promise<void> {
         const crypto = require('crypto');
-        const totalChunks = Math.ceil(encryptedData.length / P2PConnectionManager.CHUNK_SIZE);
+
+        // Handle empty file edge case (0-byte .env) requires at least 1 chunk
+        const totalChunks = Math.max(1, Math.ceil(encryptedData.length / P2PConnectionManager.CHUNK_SIZE));
         const checksum = crypto.createHash('sha256').update(encryptedData).digest('hex');
 
         this.setState(ConnectionState.Transferring);
@@ -451,7 +380,7 @@ export class P2PConnectionManager implements vscode.Disposable {
 
         this.log(`Sending file: ${fileName} (${encryptedData.length} bytes, ${totalChunks} chunks)`);
 
-        // Send chunks sequentially with progress tracking
+        // Send chunks sequentially with stop-and-wait ACK to handle backpressure and ordering
         for (let i = 0; i < totalChunks; i++) {
             const start = i * P2PConnectionManager.CHUNK_SIZE;
             const end = Math.min(start + P2PConnectionManager.CHUNK_SIZE, encryptedData.length);
@@ -464,19 +393,42 @@ export class P2PConnectionManager implements vscode.Disposable {
                 checksum: chunkChecksum,
             };
 
-            this.sendDataMessage({
-                type: DataMessageType.FileChunk,
-                payload: chunk,
-            });
+            let retries = 5;
+            let acked = false;
+            while (retries > 0 && !acked) {
+                this.sendDataMessage({
+                    type: DataMessageType.FileChunk,
+                    payload: chunk,
+                });
+
+                try {
+                    await new Promise<void>((resolve, reject) => {
+                        const timeout = setTimeout(() => reject(new Error('ACK timeout')), 5000);
+                        this.pendingChunkAck = (ackIndex: number) => {
+                            if (ackIndex === i) {
+                                clearTimeout(timeout);
+                                this.pendingChunkAck = null;
+                                resolve();
+                            }
+                        };
+                    });
+                    acked = true;
+                } catch (err) {
+                    retries--;
+                    this.log(`Chunk ${i} ack timeout, retrying... (${retries} retries left)`);
+                }
+            }
+
+            if (!acked) {
+                this.log(`Failed to send chunk ${i} after 5 retries. Aborting transfer.`);
+                this.onErrorCallback?.(`Transfer failed: could not send chunk ${i} (network timeout)`);
+                this.setState(ConnectionState.Failed);
+                return;
+            }
 
             // Progress update
             const percent = Math.round(((i + 1) / totalChunks) * 100);
             this.onTransferProgressCallback?.(percent);
-
-            // Small delay to prevent buffer overflow
-            if (i % 10 === 9) {
-                await new Promise(resolve => setTimeout(resolve, 10));
-            }
         }
 
         // Send completion message
@@ -508,6 +460,13 @@ export class P2PConnectionManager implements vscode.Disposable {
 
                 case DataMessageType.FileComplete:
                     this.handleFileComplete();
+                    break;
+
+                case DataMessageType.Ack:
+                    const ackIndex = message.payload as number;
+                    if (this.pendingChunkAck) {
+                        this.pendingChunkAck(ackIndex);
+                    }
                     break;
 
                 case DataMessageType.Error:
@@ -552,11 +511,17 @@ export class P2PConnectionManager implements vscode.Disposable {
 
         if (actualChecksum !== chunk.checksum) {
             this.log(`Chunk ${chunk.index} checksum mismatch! Expected: ${chunk.checksum}, Got: ${actualChecksum}`);
-            this.onErrorCallback?.(`Data integrity error: chunk ${chunk.index} is corrupted`);
+            // Do NOT acknowledge corrupted/out-of-order chunk — sender will timeout and retry
             return;
         }
 
         this.receivedChunks.set(chunk.index, chunk.data);
+
+        // Send ACK back to sender to prevent buffer overflow and ensure order
+        this.sendDataMessage({
+            type: DataMessageType.Ack,
+            payload: chunk.index,
+        });
 
         // Progress update
         if (this.expectedMetadata) {

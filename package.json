@@ -3,7 +3,8 @@
   "displayName": "EnvSync P2P",
   "description": "Securely synchronize .gitignored files between developers via peer-to-peer, end-to-end encrypted WebRTC data channels.",
   "version": "0.1.0",
-  "publisher": "envsync",
+  "publisher": "envSync",
+  "icon": "icon.png",
   "license": "MIT",
   "repository": {
     "type": "git",

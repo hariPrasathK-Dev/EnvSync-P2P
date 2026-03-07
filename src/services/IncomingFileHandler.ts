@@ -76,7 +76,7 @@ export class IncomingFileHandler implements vscode.Disposable {
         }
 
         // 3. Write decrypted payload to temp file
-        const tempFileName = `${fileName}.remote`;
+        const tempFileName = `${fileName}-${Date.now()}.remote`;
         const tempPath = path.join(tempDir, tempFileName);
         fs.writeFileSync(tempPath, data);
         this.log(`Wrote temp file: ${tempPath}`);
