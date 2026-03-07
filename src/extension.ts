@@ -1,6 +1,11 @@
 import * as vscode from 'vscode';
 import { WorkspaceScanner } from './services/WorkspaceScanner';
 import { PeersTreeProvider } from './views/PeersTreeProvider';
+import { SessionManager } from './services/SessionManager';
+import { IncomingFileHandler } from './services/IncomingFileHandler';
+import { AcceptIncomingCodeLensProvider } from './views/AcceptIncomingCodeLens';
+import { DotEnvParser } from './services/DotEnvParser';
+import { EnvExampleSync } from './services/EnvExampleSync';
 
 /**
  * EnvSync P2P — Extension Entry Point
@@ -19,6 +24,8 @@ import { PeersTreeProvider } from './views/PeersTreeProvider';
 
 let workspaceScanner: WorkspaceScanner | undefined;
 let treeProvider: PeersTreeProvider | undefined;
+let sessionManager: SessionManager | undefined;
+let incomingHandler: IncomingFileHandler | undefined;
 let outputChannel: vscode.OutputChannel;
 
 export function activate(context: vscode.ExtensionContext): void {
@@ -58,6 +65,70 @@ export function activate(context: vscode.ExtensionContext): void {
         outputChannel.appendLine(`Refreshed: found ${files.length} git-ignored file(s)`);
     });
 
+    // 3. SessionManager — orchestrates share/join sessions
+    sessionManager = new SessionManager(workspaceRoot, outputChannel);
+    context.subscriptions.push(sessionManager);
+
+    // 4. IncomingFileHandler — temp file + diff editor + accept/reject
+    incomingHandler = new IncomingFileHandler(workspaceRoot, outputChannel);
+    context.subscriptions.push(incomingHandler);
+
+    // Wire SessionManager → IncomingFileHandler for received files
+    sessionManager.onFileReceived(async (data, fileName) => {
+        await incomingHandler!.handleIncomingFile(data, fileName);
+    });
+
+    // 5. CodeLens provider for accept/reject on .remote temp files
+    const codeLensProvider = new AcceptIncomingCodeLensProvider();
+    context.subscriptions.push(
+        vscode.languages.registerCodeLensProvider(
+            { pattern: '**/.vscode/envsync-tmp/*.remote' },
+            codeLensProvider,
+        ),
+    );
+
+    // 6. Semantic validation — DotEnvParser + EnvExampleSync
+    const dotEnvParser = new DotEnvParser();
+    const envExampleSync = new EnvExampleSync(workspaceRoot, outputChannel);
+
+    // Pre-diff validation: check .env syntax before showing diff editor
+    incomingHandler.onBeforeDiff(async (content, fileName) => {
+        if (!fileName.startsWith('.env') || fileName === '.env.example') {
+            return true; // Not a .env file — skip validation
+        }
+
+        const validation = dotEnvParser.validate(content.toString('utf-8'));
+
+        if (!validation.valid) {
+            const errorSummary = validation.errors
+                .map(e => e.message)
+                .join('\n');
+
+            const proceed = 'Show Diff Anyway';
+            const cancel = 'Cancel';
+            const result = await vscode.window.showWarningMessage(
+                `EnvSync: Incoming "${fileName}" has ${validation.errors.length} syntax error(s):\n\n${errorSummary}`,
+                { modal: true },
+                proceed,
+                cancel,
+            );
+            return result === proceed;
+        }
+
+        if (validation.warnings.length > 0) {
+            outputChannel.appendLine(
+                `[Validation] Warnings for ${fileName}: ${validation.warnings.join('; ')}`,
+            );
+        }
+
+        return true;
+    });
+
+    // Post-accept hook: check for new keys to add to .env.example
+    incomingHandler.onAfterAccept(async (localPath, content) => {
+        await envExampleSync.promptNewKeys(localPath, content);
+    });
+
     // ─── Register Commands ───
 
     // Start Session — orchestrates a new sharing session
@@ -80,13 +151,13 @@ export function activate(context: vscode.ExtensionContext): void {
         })
     );
 
-    // Share File — select a git-ignored file to share (full impl in Phase 4)
+    // Share File — select a git-ignored file and initiate P2P sharing
     context.subscriptions.push(
         vscode.commands.registerCommand('envsync.shareFile', async () => {
             outputChannel.appendLine('Command: envsync.shareFile triggered');
 
-            if (!workspaceScanner) {
-                vscode.window.showErrorMessage('EnvSync P2P: Workspace scanner not initialized.');
+            if (!workspaceScanner || !sessionManager) {
+                vscode.window.showErrorMessage('EnvSync P2P: Extension not fully initialized.');
                 return;
             }
 
@@ -112,20 +183,22 @@ export function activate(context: vscode.ExtensionContext): void {
             });
 
             if (selected) {
-                outputChannel.appendLine(`Selected file for sharing: ${selected.filePath}`);
-                // Full sharing logic will be implemented in Phase 4
-                vscode.window.showInformationMessage(
-                    `EnvSync P2P: Ready to share "${selected.filePath}". ` +
-                    `(Full P2P sharing will be enabled in Phase 4)`
-                );
+                const absolutePath = require('path').join(workspaceRoot, selected.filePath);
+                outputChannel.appendLine(`Sharing file: ${absolutePath}`);
+                await sessionManager.startSharing(absolutePath);
             }
         })
     );
 
-    // Join Session — enter a wormhole code to receive a file (full impl in Phase 4)
+    // Join Session — enter a wormhole code and connect to receive a file
     context.subscriptions.push(
         vscode.commands.registerCommand('envsync.joinSession', async () => {
             outputChannel.appendLine('Command: envsync.joinSession triggered');
+
+            if (!sessionManager) {
+                vscode.window.showErrorMessage('EnvSync P2P: Extension not fully initialized.');
+                return;
+            }
 
             const code = await vscode.window.showInputBox({
                 prompt: 'Enter the 3-word wormhole code from your peer',
@@ -148,22 +221,42 @@ export function activate(context: vscode.ExtensionContext): void {
 
             if (code) {
                 outputChannel.appendLine(`Joining session with code: ${code}`);
-                // Full join logic will be implemented in Phase 4
-                vscode.window.showInformationMessage(
-                    `EnvSync P2P: Joining session "${code}". ` +
-                    `(Full P2P joining will be enabled in Phase 4)`
-                );
+                await sessionManager.joinSession(code.trim().toLowerCase());
             }
         })
     );
 
-    // Review Incoming — opens diff editor for an incoming file (Phase 5)
+    // Review Incoming — opens diff editor for an incoming file
     context.subscriptions.push(
         vscode.commands.registerCommand('envsync.reviewIncoming', async () => {
             outputChannel.appendLine('Command: envsync.reviewIncoming triggered');
             vscode.window.showInformationMessage(
-                'EnvSync P2P: No incoming files to review. (Diff review will be enabled in Phase 5)'
+                'EnvSync P2P: No incoming files to review at this time.'
             );
+        })
+    );
+
+    // Accept Incoming — triggered by CodeLens or notification
+    context.subscriptions.push(
+        vscode.commands.registerCommand('envsync.acceptIncoming', async (tempPath?: string) => {
+            outputChannel.appendLine(`Command: envsync.acceptIncoming — ${tempPath}`);
+            if (tempPath && incomingHandler) {
+                await incomingHandler.acceptFile(tempPath);
+            } else {
+                vscode.window.showWarningMessage('EnvSync: No incoming file to accept.');
+            }
+        })
+    );
+
+    // Reject Incoming — triggered by CodeLens or notification
+    context.subscriptions.push(
+        vscode.commands.registerCommand('envsync.rejectIncoming', async (tempPath?: string) => {
+            outputChannel.appendLine(`Command: envsync.rejectIncoming — ${tempPath}`);
+            if (tempPath && incomingHandler) {
+                await incomingHandler.rejectFile(tempPath);
+            } else {
+                vscode.window.showWarningMessage('EnvSync: No incoming file to reject.');
+            }
         })
     );
 
@@ -223,11 +316,20 @@ function getWorkspaceRoot(): string | undefined {
 
 /**
  * Extension deactivation — cleanup all resources.
- * Full teardown logic will be added in Phase 7.
  */
 export function deactivate(): void {
     if (outputChannel) {
         outputChannel.appendLine('EnvSync P2P extension deactivating...');
+    }
+    if (sessionManager) {
+        sessionManager.dispose();
+        sessionManager = undefined;
+    }
+    if (workspaceScanner) {
+        workspaceScanner.dispose();
+        workspaceScanner = undefined;
+    }
+    if (outputChannel) {
         outputChannel.dispose();
     }
 }

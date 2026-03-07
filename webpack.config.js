@@ -17,6 +17,8 @@ const extensionConfig = {
 
     externals: {
         vscode: 'commonjs vscode',
+        ws: 'commonjs ws',
+        wrtc: 'commonjs wrtc',
     },
 
     resolve: {

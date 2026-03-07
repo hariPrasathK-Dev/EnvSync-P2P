@@ -66,6 +66,16 @@
         "icon": "$(git-compare)"
       },
       {
+        "command": "envsync.acceptIncoming",
+        "title": "EnvSync: Accept Incoming File",
+        "icon": "$(check)"
+      },
+      {
+        "command": "envsync.rejectIncoming",
+        "title": "EnvSync: Reject Incoming File",
+        "icon": "$(close)"
+      },
+      {
         "command": "envsync.refreshFiles",
         "title": "EnvSync: Refresh Ignored Files",
         "icon": "$(refresh)"
@@ -101,12 +111,14 @@
   "devDependencies": {
     "@types/node": "^20.11.0",
     "@types/vscode": "^1.85.0",
+    "@types/ws": "^8.18.1",
     "ts-loader": "^9.5.1",
     "typescript": "^5.3.3",
     "webpack": "^5.89.0",
     "webpack-cli": "^5.1.4"
   },
   "dependencies": {
-    "ignore": "^5.3.0"
+    "ignore": "^5.3.0",
+    "ws": "^8.19.0"
   }
 }
