@@ -114,8 +114,8 @@ export class P2PConnectionManager implements vscode.Disposable {
 
         this.signaling.onPeerJoined(() => {
             if (this.isSender) {
-                this.log('Peer joined — initiating WebRTC connection');
-                this.createOffer();
+                this.log('Peer joined — initiating connection');
+                this.startConnection();
             }
         });
     }
@@ -126,7 +126,15 @@ export class P2PConnectionManager implements vscode.Disposable {
     public async initAsSender(): Promise<void> {
         this.isSender = true;
         this.setState(ConnectionState.Connecting);
-        this.log('Initialized as sender — waiting for peer to join');
+
+        // Eagerly detect if wrtc is available
+        this.createPeerConnection();
+
+        this.log(
+            this.useWebSocketFallback
+                ? 'Initialized as sender (WebSocket tunnel) — waiting for peer'
+                : 'Initialized as sender (WebRTC) — waiting for peer',
+        );
     }
 
     /**
@@ -135,7 +143,21 @@ export class P2PConnectionManager implements vscode.Disposable {
     public async initAsReceiver(): Promise<void> {
         this.isSender = false;
         this.setState(ConnectionState.Connecting);
-        this.log('Initialized as receiver — waiting for sender offer');
+
+        // Eagerly detect if wrtc is available
+        this.createPeerConnection();
+
+        // In fallback mode, set up the WebSocket tunnel immediately
+        // (no SDP offer will arrive, so we can't wait for handleOffer)
+        if (this.useWebSocketFallback) {
+            this.initWebSocketTunnel();
+        }
+
+        this.log(
+            this.useWebSocketFallback
+                ? 'Initialized as receiver (WebSocket tunnel) — ready to receive'
+                : 'Initialized as receiver (WebRTC) — waiting for sender offer',
+        );
     }
 
     /**
@@ -151,8 +173,8 @@ export class P2PConnectionManager implements vscode.Disposable {
                 RTCPeerConnectionImpl = wrtc.RTCPeerConnection;
                 this.log('Using wrtc (node-webrtc) for P2P connection');
             } catch {
-                // wrtc not available — use WebSocket fallback
-                this.log('wrtc not available — using encrypted WebSocket tunnel fallback');
+                // wrtc not available — will use WebSocket fallback
+                this.log('wrtc not available — will use encrypted WebSocket tunnel fallback');
                 this.useWebSocketFallback = true;
                 return;
             }
@@ -221,21 +243,29 @@ export class P2PConnectionManager implements vscode.Disposable {
     }
 
     /**
-     * Create and send an SDP offer (sender side).
+     * Start a connection — try WebRTC first, fall back to WebSocket tunnel.
+     * Called when peer joins (sender side). createPeerConnection was already
+     * called in initAsSender, so we just check the fallback flag.
      */
-    private async createOffer(): Promise<void> {
-        this.createPeerConnection();
-
+    private async startConnection(): Promise<void> {
         if (this.useWebSocketFallback) {
             this.initWebSocketTunnel();
             return;
         }
 
+        // WebRTC path — create offer
+        await this.createOffer();
+    }
+
+    /**
+     * Create and send an SDP offer (sender side).
+     */
+    private async createOffer(): Promise<void> {
         if (!this.peerConnection) { return; }
 
         // Create data channel (sender creates it)
         this.dataChannel = this.peerConnection.createDataChannel('envsync-transfer', {
-            ordered: true,        // Guaranteed ordering for file integrity
+            ordered: true,
         });
         this.setupDataChannel();
 
@@ -343,14 +373,14 @@ export class P2PConnectionManager implements vscode.Disposable {
      */
     private initWebSocketTunnel(): void {
         this.log('Initializing encrypted WebSocket tunnel fallback');
-        this.setState(ConnectionState.Connected);
 
-        // In fallback mode, we'll use the signaling WebSocket for data transfer too.
-        // The data is already AES-256-GCM encrypted, so the relay sees only ciphertext.
-        // This is architecturally acceptable because:
-        //   1. The relay cannot decrypt the data (it doesn't have the wormhole code)
-        //   2. The relay still has zero knowledge of the plaintext
-        //   3. The only tradeoff is that data transits the relay instead of going P2P
+        // Wire up incoming data messages from the signaling relay
+        this.signaling.onData((data: string) => {
+            this.handleDataMessage(data);
+        });
+
+        // Mark as connected so the sender begins transmitting
+        this.setState(ConnectionState.Connected);
     }
 
     /**
@@ -524,11 +554,7 @@ export class P2PConnectionManager implements vscode.Disposable {
 
         if (this.useWebSocketFallback) {
             // Use the signaling WebSocket as an encrypted tunnel
-            this.signaling.send({
-                type: 'data' as any,
-                roomId: '',
-                payload: json,
-            });
+            this.signaling.sendData(json);
             return;
         }
 

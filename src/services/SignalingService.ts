@@ -12,6 +12,7 @@ export enum SignalType {
     IceCandidate = 'ice-candidate',
     PeerJoined = 'peer-joined',
     PeerLeft = 'peer-left',
+    Data = 'data',
     Error = 'error',
 }
 
@@ -47,6 +48,7 @@ export class SignalingService implements vscode.Disposable {
     private onOfferCallback: ((offer: RTCSessionDescriptionInit) => void) | null = null;
     private onAnswerCallback: ((answer: RTCSessionDescriptionInit) => void) | null = null;
     private onIceCandidateCallback: ((candidate: RTCIceCandidateInit) => void) | null = null;
+    private onDataCallback: ((data: string) => void) | null = null;
     private onErrorCallback: ((error: string) => void) | null = null;
     private onConnectedCallback: (() => void) | null = null;
     private onDisconnectedCallback: (() => void) | null = null;
@@ -155,6 +157,10 @@ export class SignalingService implements vscode.Disposable {
                     this.onErrorCallback?.(message.payload as string);
                     break;
 
+                case SignalType.Data:
+                    this.onDataCallback?.(message.payload as string);
+                    break;
+
                 default:
                     this.log(`Unknown signal type: ${message.type}`);
             }
@@ -210,6 +216,17 @@ export class SignalingService implements vscode.Disposable {
     }
 
     /**
+     * Send a data message through the relay (WebSocket tunnel fallback).
+     */
+    public sendData(data: string): void {
+        this.send({
+            type: SignalType.Data,
+            roomId: this.roomId,
+            payload: data,
+        });
+    }
+
+    /**
      * Attempt to reconnect with exponential backoff.
      */
     private attemptReconnect(relayUrl: string): void {
@@ -248,6 +265,10 @@ export class SignalingService implements vscode.Disposable {
 
     public onIceCandidate(callback: (candidate: RTCIceCandidateInit) => void): void {
         this.onIceCandidateCallback = callback;
+    }
+
+    public onData(callback: (data: string) => void): void {
+        this.onDataCallback = callback;
     }
 
     public onError(callback: (error: string) => void): void {
