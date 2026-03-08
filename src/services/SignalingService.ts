@@ -76,7 +76,7 @@ export class SignalingService implements vscode.Disposable {
                 const connectionTimeout = setTimeout(() => {
                     reject(new Error('Signaling server connection timed out (15m)'));
                     this.ws?.close();
-                }, 900000);
+                }, 300000);
 
                 this.ws!.on('open', () => {
                     clearTimeout(connectionTimeout);
