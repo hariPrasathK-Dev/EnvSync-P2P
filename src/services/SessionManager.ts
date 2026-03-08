@@ -98,20 +98,7 @@ export class SessionManager implements vscode.Disposable {
         }
 
         const fileBuffer = fs.readFileSync(filePath);
-
-        // Preserve relative path to support nested directories
-        let normalizedFileName: string;
-        if (relativePath) {
-            normalizedFileName = relativePath.split(path.sep).join('/');
-        } else {
-            if (filePath.startsWith(this.workspaceRoot)) {
-                normalizedFileName = path.relative(this.workspaceRoot, filePath).split(path.sep).join('/');
-            } else {
-                normalizedFileName = path.basename(filePath);
-            }
-        }
-
-        const fileName = normalizedFileName;
+        const fileName = relativePath ? relativePath.replace(/\\/g, '/') : path.basename(filePath);
         this.activeFilePath = filePath;
 
         // 2. Generate wormhole code
@@ -151,9 +138,11 @@ export class SessionManager implements vscode.Disposable {
         this.p2pManager = new P2PConnectionManager(this.signaling!, this.outputChannel);
         await this.p2pManager.initAsSender();
 
+        let fileSent = false;
         // 8. Wire up — when peer connects and data channel opens, encrypt & send
         this.p2pManager.onStateChange(async (state) => {
-            if (state === ConnectionState.Connected) {
+            if (state === ConnectionState.Connected && !fileSent) {
+                fileSent = true;
                 this.updateStatus('$(cloud-upload) Encrypting & sending...', `Sharing: ${fileName}`);
                 this.log('Peer connected — encrypting file...');
 

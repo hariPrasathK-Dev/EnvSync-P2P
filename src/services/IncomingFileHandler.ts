@@ -69,16 +69,12 @@ export class IncomingFileHandler implements vscode.Disposable {
             }
         }
 
-        // 2. Determine temp path and ensure deep directory exists
+        // 2. Determine temp path
         const tempFileName = `${fileName}-${Date.now()}.remote`;
         const tempPath = path.join(this.workspaceRoot, IncomingFileHandler.TEMP_DIR, tempFileName);
-        const tempFileDir = path.dirname(tempPath);
 
-        if (!fs.existsSync(tempFileDir)) {
-            fs.mkdirSync(tempFileDir, { recursive: true });
-        }
-
-        // 3. Write decrypted payload to temp file
+        // 3. Write decrypted payload to temp file, ensuring deep directory exists
+        fs.mkdirSync(path.dirname(tempPath), { recursive: true });
         fs.writeFileSync(tempPath, data);
         this.log(`Wrote temp file: ${tempPath}`);
 
