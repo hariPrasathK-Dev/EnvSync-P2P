@@ -185,7 +185,7 @@ export function activate(context: vscode.ExtensionContext): void {
             if (selected) {
                 const absolutePath = require('path').join(workspaceRoot, selected.filePath);
                 outputChannel.appendLine(`Sharing file: ${absolutePath}`);
-                await sessionManager.startSharing(absolutePath);
+                await sessionManager.startSharing(absolutePath, selected.filePath);
             }
         })
     );

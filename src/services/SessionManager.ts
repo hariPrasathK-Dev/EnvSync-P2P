@@ -88,7 +88,7 @@ export class SessionManager implements vscode.Disposable {
      * Initiate a file sharing session.
      * @param filePath Absolute path to the file to share.
      */
-    public async startSharing(filePath: string): Promise<void> {
+    public async startSharing(filePath: string, relativePath?: string): Promise<void> {
         this.log('Starting share session...');
 
         // 1. Read the file
@@ -98,7 +98,20 @@ export class SessionManager implements vscode.Disposable {
         }
 
         const fileBuffer = fs.readFileSync(filePath);
-        const fileName = path.basename(filePath);
+
+        // Preserve relative path to support nested directories
+        let normalizedFileName: string;
+        if (relativePath) {
+            normalizedFileName = relativePath.split(path.sep).join('/');
+        } else {
+            if (filePath.startsWith(this.workspaceRoot)) {
+                normalizedFileName = path.relative(this.workspaceRoot, filePath).split(path.sep).join('/');
+            } else {
+                normalizedFileName = path.basename(filePath);
+            }
+        }
+
+        const fileName = normalizedFileName;
         this.activeFilePath = filePath;
 
         // 2. Generate wormhole code

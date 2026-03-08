@@ -291,6 +291,10 @@ export class SignalingService implements vscode.Disposable {
         return this.ws !== null && this.ws.readyState === 1;
     }
 
+    public get bufferedAmount(): number {
+        return this.ws ? this.ws.bufferedAmount : 0;
+    }
+
     private log(message: string): void {
         this.outputChannel.appendLine(`[Signaling] ${message}`);
     }

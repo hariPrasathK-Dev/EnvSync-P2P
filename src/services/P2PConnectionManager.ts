@@ -396,6 +396,12 @@ export class P2PConnectionManager implements vscode.Disposable {
             let retries = 5;
             let acked = false;
             while (retries > 0 && !acked) {
+                // Backpressure Check: Wait if underlying buffer exceeds high-water mark
+                const HIGH_WATER_MARK = 64 * 1024; // 64KB threshold
+                while (this.getBufferedAmount() > HIGH_WATER_MARK) {
+                    await new Promise(resolve => setTimeout(resolve, 50));
+                }
+
                 this.sendDataMessage({
                     type: DataMessageType.FileChunk,
                     payload: chunk,
@@ -586,6 +592,18 @@ export class P2PConnectionManager implements vscode.Disposable {
         } else {
             this.log('Data channel not open — cannot send message');
         }
+    }
+
+    /**
+     * Get the current buffered amount from the active transport.
+     */
+    private getBufferedAmount(): number {
+        if (this.useWebSocketFallback) {
+            return this.signaling.bufferedAmount;
+        } else if (this.dataChannel) {
+            return (this.dataChannel as any).bufferedAmount || 0;
+        }
+        return 0;
     }
 
     // ─── Event Registration ───
