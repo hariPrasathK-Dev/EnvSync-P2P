@@ -74,9 +74,9 @@ export class SignalingService implements vscode.Disposable {
                 this.ws = new WebSocket(relayUrl);
 
                 const connectionTimeout = setTimeout(() => {
-                    reject(new Error('Signaling server connection timed out (10s)'));
+                    reject(new Error('Signaling server connection timed out (15m)'));
                     this.ws?.close();
-                }, 10000);
+                }, 900000);
 
                 this.ws!.on('open', () => {
                     clearTimeout(connectionTimeout);

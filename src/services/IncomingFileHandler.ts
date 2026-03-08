@@ -20,8 +20,9 @@ export class IncomingFileHandler implements vscode.Disposable {
 
     // Tracks pending incoming files: tempPath → { localPath, fileName }
     private pendingFiles: Map<string, { localPath: string; fileName: string }> = new Map();
+    private activeSyncFiles: Set<string> = new Set();
 
-    // Callback for Phase 6 validation (set externally)
+    // Callbacks for Phase 6 integrations (set externally)
     private onBeforeDiffCallback:
         ((content: Buffer, fileName: string) => Promise<boolean>) | null = null;
 
@@ -86,6 +87,12 @@ export class IncomingFileHandler implements vscode.Disposable {
 
         // 6. Check if local file exists
         if (fs.existsSync(localPath)) {
+            if (this.activeSyncFiles.has(localPath)) {
+                // Background update: skip diff and silently accept
+                await this.acceptFile(tempPath, true);
+                return;
+            }
+
             // Open diff editor: local (left) vs remote/incoming (right)
             const localUri = vscode.Uri.file(localPath);
             const remoteUri = vscode.Uri.file(tempPath);
@@ -128,8 +135,9 @@ export class IncomingFileHandler implements vscode.Disposable {
 
     /**
      * Accept an incoming file: overwrite local with temp, cleanup.
+     * @param silent If true, suppresses the success notification (e.g., for live sync).
      */
-    public async acceptFile(tempPath: string): Promise<void> {
+    public async acceptFile(tempPath: string, silent: boolean = false): Promise<void> {
         const pending = this.pendingFiles.get(tempPath);
         if (!pending) {
             this.log(`No pending file found for: ${tempPath}`);
@@ -155,9 +163,19 @@ export class IncomingFileHandler implements vscode.Disposable {
                 await this.onAfterAcceptCallback(localPath, content);
             }
 
-            vscode.window.showInformationMessage(
-                `EnvSync: "${fileName}" accepted and saved! ✅`,
-            );
+            // Track for future live syncs
+            this.activeSyncFiles.add(localPath);
+
+            if (!silent) {
+                vscode.window.showInformationMessage(
+                    `EnvSync: "${fileName}" accepted and saved! ✅`,
+                );
+            } else {
+                vscode.window.showInformationMessage(
+                    `EnvSync: "${fileName}" updated in background.`,
+                    'Got it'
+                );
+            }
         } catch (err: unknown) {
             const msg = err instanceof Error ? err.message : String(err);
             vscode.window.showErrorMessage(`EnvSync: Failed to save file — ${msg}`);
@@ -222,6 +240,13 @@ export class IncomingFileHandler implements vscode.Disposable {
         } catch {
             // Best-effort
         }
+    }
+
+    /**
+     * Clear the live sync tracking set (called when session stops).
+     */
+    public clearActiveSyncFiles(): void {
+        this.activeSyncFiles.clear();
     }
 
     /**

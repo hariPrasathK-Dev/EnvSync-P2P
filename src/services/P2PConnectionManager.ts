@@ -11,6 +11,7 @@ export enum DataMessageType {
     Ack = 'ack',
     Ready = 'ready',
     Error = 'error',
+    Disconnect = 'disconnect',
 }
 
 export interface FileMetadata {
@@ -480,6 +481,11 @@ export class P2PConnectionManager implements vscode.Disposable {
                     this.onErrorCallback?.(message.payload as string);
                     break;
 
+                case DataMessageType.Disconnect:
+                    this.log('Remote peer explicitly disconnected the session.');
+                    this.setState(ConnectionState.Disconnected);
+                    break;
+
                 case DataMessageType.Ready:
                     this.log('Received Ready handshake from receiver');
                     if (this.isSender) {
@@ -622,6 +628,10 @@ export class P2PConnectionManager implements vscode.Disposable {
 
     public onError(callback: (error: string) => void): void {
         this.onErrorCallback = callback;
+    }
+
+    public sendDisconnect(): void {
+        this.sendDataMessage({ type: DataMessageType.Disconnect });
     }
 
     public getState(): ConnectionState {

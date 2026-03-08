@@ -190,6 +190,17 @@ export function activate(context: vscode.ExtensionContext): void {
         })
     );
 
+    // Stop Session — explicit manual disconnect
+    context.subscriptions.push(
+        vscode.commands.registerCommand('envsync.stopSession', () => {
+            outputChannel.appendLine('Command: envsync.stopSession triggered');
+            if (sessionManager) {
+                sessionManager.cleanup();
+                vscode.window.showInformationMessage('EnvSync: Session disconnected.');
+            }
+        })
+    );
+
     // Join Session — enter a wormhole code and connect to receive a file
     context.subscriptions.push(
         vscode.commands.registerCommand('envsync.joinSession', async () => {

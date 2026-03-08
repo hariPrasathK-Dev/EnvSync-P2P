@@ -36,6 +36,11 @@ export class SessionManager implements vscode.Disposable {
     // Active session state
     private activePassphrase: string | null = null;
     private activeFilePath: string | null = null;
+
+    // Live Sync watchers
+    private fileWatcher: vscode.FileSystemWatcher | null = null;
+    private debounceTimer: ReturnType<typeof setTimeout> | null = null;
+
     private statusBarItem: vscode.StatusBarItem;
 
     // Callback for Phase 5: receives decrypted data + metadata
@@ -56,10 +61,12 @@ export class SessionManager implements vscode.Disposable {
 
         // Status bar item for connection state
         this.statusBarItem = vscode.window.createStatusBarItem(
-            vscode.StatusBarAlignment.Left, 100,
+            vscode.StatusBarAlignment.Right, 100,
         );
+        this.statusBarItem.command = 'envsync.stopSession';
         this.statusBarItem.text = '$(lock) EnvSync';
         this.statusBarItem.tooltip = 'EnvSync P2P — No active session';
+        this.statusBarItem.show();
     }
 
     /**
@@ -159,6 +166,9 @@ export class SessionManager implements vscode.Disposable {
                         `EnvSync: "${fileName}" sent successfully! ✅`,
                     );
                     this.updateStatus('$(check) Transfer complete', `Sent: ${fileName}`);
+
+                    // 9. Begin Live Sync
+                    this.setupLiveSync(filePath, fileName, code);
                 } catch (err: unknown) {
                     const msg = err instanceof Error ? err.message : String(err);
                     vscode.window.showErrorMessage(`EnvSync: Transfer failed — ${msg}`);
@@ -178,6 +188,45 @@ export class SessionManager implements vscode.Disposable {
             vscode.window.showErrorMessage(`EnvSync P2P Error: ${error}`);
             this.updateStatus('$(error) Error', error);
         });
+    }
+
+    private setupLiveSync(filePath: string, fileName: string, code: string): void {
+        if (this.fileWatcher) {
+            this.fileWatcher.dispose();
+        }
+
+        this.fileWatcher = vscode.workspace.createFileSystemWatcher(filePath);
+
+        const triggerSync = () => {
+            if (this.debounceTimer) {
+                clearTimeout(this.debounceTimer);
+            }
+            this.debounceTimer = setTimeout(async () => {
+                if (!this.p2pManager || this.p2pManager.getState() !== ConnectionState.Connected) {
+                    return;
+                }
+
+                this.log(`File changed, triggering live sync for: ${fileName}`);
+                this.updateStatus('$(sync~spin) Syncing...', `Updating: ${fileName}`);
+
+                try {
+                    const fs = require('fs');
+                    const freshBuffer = fs.readFileSync(filePath);
+                    const encryptedPayload = await this.encryption.encrypt(freshBuffer, code);
+                    const payloadBuffer = Buffer.from(JSON.stringify(encryptedPayload));
+
+                    await this.p2pManager.sendFile(payloadBuffer, fileName);
+                    this.updateStatus('$(check) Synced', `Live: ${fileName}`);
+                } catch (err) {
+                    const msg = err instanceof Error ? err.message : String(err);
+                    this.log(`Live sync failed: ${msg}`);
+                    this.updateStatus('$(error) Sync failed', msg);
+                }
+            }, 1000);
+        };
+
+        this.fileWatcher.onDidChange(triggerSync);
+        this.log('Live sync watcher established.');
     }
 
     // ════════════════════════════════════════════
@@ -323,7 +372,18 @@ export class SessionManager implements vscode.Disposable {
      * Clean up the current session's resources.
      */
     public cleanup(): void {
+        if (this.debounceTimer) {
+            clearTimeout(this.debounceTimer);
+            this.debounceTimer = null;
+        }
+        if (this.fileWatcher) {
+            this.fileWatcher.dispose();
+            this.fileWatcher = null;
+        }
         if (this.p2pManager) {
+            if (this.p2pManager.getState() === ConnectionState.Connected) {
+                this.p2pManager.sendDisconnect();
+            }
             this.p2pManager.dispose();
             this.p2pManager = null;
         }
@@ -331,6 +391,7 @@ export class SessionManager implements vscode.Disposable {
             this.signaling.dispose();
             this.signaling = null;
         }
+
         this.activePassphrase = null;
         this.activeFilePath = null;
         this.statusBarItem.text = '$(lock) EnvSync';
